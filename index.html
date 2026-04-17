@@ -138,9 +138,6 @@
 
 <script>
   // Static GitHub Pages frontend using Hugging Face inference
-  const HF_API_TOKEN = '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';
-  const HF_MODEL = 'joeddav/xlm-roberta-large-xnli';
-  const LABELS = ['Non-Offensive', 'Offensive'];
 
   // ── State ──────────────────────────────────────────────────────────────────
   let selectedLang    = 'hindi';
@@ -161,11 +158,13 @@
   }
 
   async function checkStatus() {
-    if (HF_API_TOKEN === 'YOUR_HUGGINGFACE_API_TOKEN') {
-      setStatus('Set your Hugging Face token in index.html before deploying', 'warn');
-      return;
-    }
-    setStatus('Static GitHub Pages mode ready', 'ok');
+   try {
+  const res = await fetch('/health');
+  if (!res.ok) throw new Error();
+  setStatus('Backend connected', 'ok');
+} catch {
+  setStatus('Backend not reachable', 'warn');
+}
   }
 
   window.addEventListener('load', () => { checkStatus(); });
@@ -363,54 +362,25 @@
   }
 
   async function classifyText(text) {
-    if (HF_API_TOKEN === 'YOUR_HUGGINGFACE_API_TOKEN') {
-      throw new Error('Hugging Face token is not set. Update HF_API_TOKEN in index.html.');
-    }
+  const response = await fetch('/analyze-text', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      text: text,
+      language: selectedLang
+    })
+  });
 
-    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://api-inference.huggingface.co/models/${HF_MODEL}`)}`;
-    const response = await fetch(proxyUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${HF_API_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        inputs: text,
-        parameters: {
-          candidate_labels: LABELS,
-          hypothesis_template: 'This example is {}.',
-        },
-      }),
-    });
+  const data = await response.json();
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error('Hugging Face inference failed: ' + errText);
-    }
-
-    const data = await response.json();
-    const labels = data.labels || [];
-    const scores = data.scores || [];
-    const label = labels[0] || 'Non-Offensive';
-    const label_id = LABELS.indexOf(label) >= 0 ? LABELS.indexOf(label) : 0;
-    const probs = { non_offensive: 0, offensive: 0 };
-
-    labels.forEach((lbl, index) => {
-      const value = Math.round((scores[index] || 0) * 10000) / 100;
-      if (lbl === 'Non-Offensive') probs.non_offensive = value;
-      if (lbl === 'Offensive') probs.offensive = value;
-    });
-
-    return {
-      label,
-      label_id,
-      confidence: Math.round((scores[0] || 0) * 10000) / 100,
-      language: selectedLang,
-      text,
-      probs,
-      translation: '',
-    };
+  if (!response.ok) {
+    throw new Error(data.error || 'Server error');
   }
+
+  return data;
+}
 
   // ── Analyze text ───────────────────────────────────────────────────────────
   async function analyzeText() {
@@ -435,8 +405,21 @@
     btn.disabled = true; btn.textContent = 'Processing…';
 
     try {
-      const result = await classifyText(transcriptText);
-      renderResult({ ...result, transcript: transcriptText });
+      const response = await fetch('/analyze-speech', {
+  method: 'POST',
+  body: (() => {
+    const fd = new FormData();
+    fd.append('language', selectedLang);
+    fd.append('stt_language', selectedSttLang);
+    fd.append('transcript', transcriptText); // pass transcript
+    return fd;
+  })()
+});
+
+const data = await response.json();
+if (!response.ok) throw new Error(data.error || 'Server error');
+
+renderResult({ ...data, transcript: transcriptText });
     } catch (e) {
       showError(e.message);
       setIdle();
